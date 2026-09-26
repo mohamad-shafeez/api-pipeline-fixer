@@ -14,9 +14,15 @@ from app.canonical import hash_payload
 from app.database import (
     claim_idempotency_key,
     complete_idempotency_record,
+    fail_idempotency_record,
     get_connection,
     init_db,
     rollback_idempotency_claim,
+)
+from app.destination import (
+    execute_delivery,
+    get_destination_adapter,
+    get_retry_config,
 )
 from app.schemas import WebhookPayload, WebhookResponse
 
@@ -93,32 +99,68 @@ async def ingest_webhook(payload: WebhookPayload, request: Request) -> Response:
         claim_outcome = claim_idempotency_key(conn, payload.event_id, payload_hash)
 
         if claim_outcome.is_new:
-            # Case 1: First request
-            response_data = WebhookResponse(
-                status="accepted",
-                event_id=payload.event_id,
-                message="Event accepted by ingestion boundary",
-            ).model_dump()
-            response_json_str = json.dumps(response_data)
+            # Deliver payload via destination adapter with bounded retries
+            adapter = get_destination_adapter()
+            retry_config = get_retry_config()
+            delivery_result = execute_delivery(payload, adapter, retry_config)
 
-            try:
-                complete_idempotency_record(
-                    conn,
-                    idempotency_key=payload.event_id,
+            if delivery_result.success:
+                response_data = WebhookResponse(
+                    status="accepted",
+                    event_id=payload.event_id,
+                    message="Event accepted and delivered successfully",
+                ).model_dump()
+                response_json_str = json.dumps(response_data)
+
+                try:
+                    complete_idempotency_record(
+                        conn,
+                        idempotency_key=payload.event_id,
+                        status_code=status.HTTP_200_OK,
+                        response_body=response_json_str,
+                    )
+                except sqlite3.Error as exc:
+                    rollback_idempotency_claim(conn, payload.event_id)
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Database persistence error during completion",
+                    ) from exc
+
+                return JSONResponse(
                     status_code=status.HTTP_200_OK,
-                    response_body=response_json_str,
+                    content=response_data,
                 )
-            except sqlite3.Error as exc:
-                rollback_idempotency_claim(conn, payload.event_id)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Database persistence error during completion",
-                ) from exc
+            else:
+                # Terminal failure: retries exhausted or non-retryable error
+                failure_data = {
+                    "detail": (
+                        f"Destination delivery failed ({delivery_result.error_category}): "
+                        f"{delivery_result.final_response.error_message or 'Delivery failure'}"
+                    ),
+                    "event_id": payload.event_id,
+                    "attempt_count": delivery_result.attempt_count,
+                    "error_category": delivery_result.error_category,
+                }
+                failure_json_str = json.dumps(failure_data)
 
-            return JSONResponse(
-                status_code=status.HTTP_200_OK,
-                content=response_data,
-            )
+                try:
+                    fail_idempotency_record(
+                        conn,
+                        idempotency_key=payload.event_id,
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        response_body=failure_json_str,
+                    )
+                except sqlite3.Error as exc:
+                    rollback_idempotency_claim(conn, payload.event_id)
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Database persistence error during failure recording",
+                    ) from exc
+
+                return JSONResponse(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    content=failure_data,
+                )
 
         existing = claim_outcome.record
 

@@ -212,6 +212,30 @@ def rollback_idempotency_claim(
         pass
 
 
+def fail_idempotency_record(
+    conn: sqlite3.Connection,
+    idempotency_key: str,
+    status_code: int = 502,
+    response_body: Optional[str] = None,
+) -> None:
+    """
+    Transition a claimed idempotency record from 'PROCESSING' to 'FAILED'.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    with conn:
+        conn.execute(
+            """
+            UPDATE idempotency_records
+            SET status = 'FAILED',
+                response_status_code = ?,
+                response_body = ?,
+                updated_at = ?
+            WHERE idempotency_key = ?
+            """,
+            (status_code, response_body, now, idempotency_key),
+        )
+
+
 def record_idempotency_failure(
     conn: sqlite3.Connection,
     idempotency_key: str,
