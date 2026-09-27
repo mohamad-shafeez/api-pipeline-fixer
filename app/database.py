@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import sqlite3
-from typing import Generator, Optional
+from typing import Any, Generator, Optional
 
 DEFAULT_DB_PATH: str = "pipeline.db"
 _DB_PATH: str = DEFAULT_DB_PATH
@@ -54,8 +54,10 @@ def init_db(db_path: Optional[str] = None) -> None:
     """
     Initialize the SQLite database schema if not already present.
 
-    Creates the `idempotency_records` table with a PRIMARY KEY constraint
-    on `idempotency_key` ensuring atomic claim uniqueness.
+    Creates:
+    - `idempotency_records`: tracks atomic claims and lifecycle states (PROCESSING, COMPLETED, FAILED)
+    - `dead_letter_records`: stores forensic failure records for terminal failures
+    - `dead_letter_queue`: compatibility view matching PROJECT_SPEC.md
     """
     with get_db(db_path) as conn:
         with conn:
@@ -70,6 +72,34 @@ def init_db(db_path: Optional[str] = None) -> None:
                     response_status_code INTEGER,
                     response_body TEXT
                 );
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dead_letter_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    idempotency_key TEXT NOT NULL,
+                    raw_payload TEXT NOT NULL,
+                    normalized_payload TEXT,
+                    error_category TEXT NOT NULL,
+                    http_status INTEGER,
+                    error_message TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL,
+                    attempt_history TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_dlq_idempotency_key
+                ON dead_letter_records (idempotency_key);
+                """
+            )
+            conn.execute(
+                """
+                CREATE VIEW IF NOT EXISTS dead_letter_queue AS
+                SELECT * FROM dead_letter_records;
                 """
             )
 
@@ -234,6 +264,80 @@ def fail_idempotency_record(
             """,
             (status_code, response_body, now, idempotency_key),
         )
+
+
+def record_terminal_failure(
+    conn: sqlite3.Connection,
+    idempotency_key: str,
+    raw_payload: str,
+    normalized_payload: Optional[str],
+    error_category: str,
+    http_status: Optional[int],
+    error_message: str,
+    attempt_count: int,
+    attempt_history: list[dict[str, Any]],
+    status_code: int = 502,
+    response_body: Optional[str] = None,
+) -> int:
+    """
+    Atomically transition idempotency record to 'FAILED' and persist to DLQ.
+
+    Executed in a single SQLite transaction scope. If DLQ persistence fails,
+    the transaction is rolled back, preventing orphaned or unrecorded failure states.
+
+    Returns:
+        The generated DLQ record ID.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    history_json = json.dumps(attempt_history)
+
+    with conn:
+        conn.execute(
+            """
+            UPDATE idempotency_records
+            SET status = 'FAILED',
+                response_status_code = ?,
+                response_body = ?,
+                updated_at = ?
+            WHERE idempotency_key = ?
+            """,
+            (status_code, response_body, now, idempotency_key),
+        )
+
+        cursor = conn.execute(
+            """
+            INSERT INTO dead_letter_records (
+                idempotency_key, raw_payload, normalized_payload, error_category,
+                http_status, error_message, attempt_count, attempt_history, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                idempotency_key,
+                raw_payload,
+                normalized_payload,
+                error_category,
+                http_status,
+                error_message,
+                attempt_count,
+                history_json,
+                now,
+            ),
+        )
+        return cursor.lastrowid
+
+
+def get_dlq_count(
+    conn: sqlite3.Connection, idempotency_key: Optional[str] = None
+) -> int:
+    """Return the total count of dead-letter records, optionally filtered by key."""
+    if idempotency_key is not None:
+        cursor = conn.execute(
+            "SELECT COUNT(*) FROM dead_letter_records WHERE idempotency_key = ?",
+            (idempotency_key,),
+        )
+    else:
+        cursor = conn.execute("SELECT COUNT(*) FROM dead_letter_records")
+    return cursor.fetchone()[0]
 
 
 def record_idempotency_failure(

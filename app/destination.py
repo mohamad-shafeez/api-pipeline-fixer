@@ -9,8 +9,10 @@ calculations, and deterministic execution per PROJECT_SPEC.md Sections 8 and 10.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import logging
 import time
 from typing import Any, Callable, Optional
+from app.logging_conf import log_event
 from app.schemas import WebhookPayload
 
 
@@ -95,7 +97,7 @@ class SimulatedDestinationAdapter(DestinationAdapter):
         # Check for directives in payload.data
         if isinstance(payload.data, dict):
             if "simulated_responses" in payload.data:
-                if payload.event_id not in self._directive_queues:
+                if not self._directive_queues.get(payload.event_id):
                     raw_seq = payload.data["simulated_responses"]
                     self._directive_queues[payload.event_id] = [
                         self._parse_directive_item(item) for item in raw_seq
@@ -226,6 +228,12 @@ def execute_delivery(
     )
 
     for attempt in range(1, cfg.max_attempts + 1):
+        log_event(
+            "delivery_attempt",
+            level=logging.INFO,
+            event_id=payload.event_id,
+            attempt=attempt,
+        )
         try:
             response = adapter.deliver(payload)
         except Exception as exc:
@@ -278,6 +286,15 @@ def execute_delivery(
 
         # Backoff before next attempt
         delay = calculate_backoff(attempt, cfg)
+        log_event(
+            "retry_scheduled",
+            level=logging.WARNING,
+            event_id=payload.event_id,
+            attempt=attempt,
+            destination_status=response.status_code,
+            error_category=classify_failure(response),
+            delay_seconds=delay,
+        )
         if delay > 0:
             sleeper(delay)
 
