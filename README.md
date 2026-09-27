@@ -65,7 +65,7 @@ HTTP 502 Bad Gateway
 
 ## Request Lifecycle
 
-1. **Ingestion**: Raw HTTP request body is captured as byte-exact evidence before parsing.
+1. **Ingestion**: Raw HTTP request body is captured before parsing and preserved in its original textual representation for DLQ evidence.
 2. **Validation**: Pydantic validates data types, required fields, and ISO-8601 timestamps.
 3. **Normalization**: The payload is normalized into canonical JSON and hashed with SHA-256.
 4. **Idempotency**: An atomic SQLite transaction checks existing claims:
@@ -248,7 +248,7 @@ When an event experiences a **terminal destination failure**, a forensic record 
 Each DLQ record contains:
 - `id`: Auto-incrementing record ID.
 - `idempotency_key`: The `event_id`.
-- `raw_payload`: Exact UTF-8 request body bytes as transmitted over the wire.
+- `raw_payload`: Original request body textual representation preserved for forensic evidence.
 - `normalized_payload`: Canonical JSON representation for structured comparison.
 - `error_category`: `SERVER_ERROR`, `CLIENT_ERROR`, `RATE_LIMIT`, or `TIMEOUT`.
 - `http_status`: Final downstream HTTP status code (or `null` on timeout).
