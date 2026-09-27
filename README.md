@@ -24,6 +24,8 @@ This repository provides an auditable, resilient architecture that handles each 
 
 The pipeline processes each incoming webhook request **synchronously/inline** within the HTTP request lifecycle. There are no external message brokers, background workers, or task queues.
 
+![Resilient Integration Pipeline Architecture](assets/Resilient%20Integration%20Pipeline%20Architecture.png)
+
 ```
 Client
   |
@@ -185,6 +187,9 @@ Malformed JSON or invalid schemas fail at the ingestion boundary:
 ## Idempotency Model
 
 Idempotency is keyed by `event_id`. To ensure correctness:
+
+![Webhook Idempotency and Persistence Flow](assets/Webhook%20Idempotency%20and%20Persistence%20Flow.png)
+
 - **Canonical Hash**: A SHA-256 hash of the normalized payload is stored with the claim.
 - **State Machine**:
   - `PROCESSING`: Claimed upon ingestion. Blocks concurrent attempts with HTTP 409.
@@ -345,7 +350,7 @@ SQLite is used for local persistence with WAL mode and busy timeouts:
 ### 2. Clone and Setup Environment
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/mohamad-shafeez/api-pipeline-fixer.git
 cd api-pipeline-fixer
 
 # Create virtual environment
@@ -413,8 +418,7 @@ api-pipeline-fixer/
 │   ├── logging_conf.py       # Structured JSON logging formatter and setup
 │   ├── main.py               # FastAPI application & webhook ingestion endpoint
 │   └── schemas.py            # Pydantic v2 request & response models
-├── docs/
-│   └── README.md             # Additional documentation placeholder
+├── assets/                   # Architecture and persistence flow diagrams
 ├── tests/
 │   ├── __init__.py           # Test package marker
 │   ├── conftest.py           # Shared test fixtures & database isolation
@@ -436,8 +440,8 @@ api-pipeline-fixer/
 ## Proof-of-Work Summary
 
 This project demonstrates core backend integration capabilities:
-- **FastAPI / Python 3.11**: Asynchronous endpoint handling, dependency injection, and clean exception handling.
-- **Pydantic v2**: Strict schema validation and data parsing.
+- **FastAPI / Python 3.11**: HTTP API implementation, request validation, structured error handling, and synchronous integration processing.
+- **Pydantic v2**: Request schema validation and data parsing.
 - **Relational Transactions**: Atomic multi-table updates using standard SQLite transactions without ORM overhead.
 - **Defensive Idempotency**: State machine management preventing double-execution and payload tampering.
 - **Resilient Retry Logic**: Exponential backoff and deterministic status code classification.
