@@ -2,6 +2,12 @@
 
 A synchronous FastAPI webhook ingestion pipeline demonstrating defensive backend integration patterns including schema validation, canonical payload normalization, atomic idempotency, retry/exponential backoff, failure classification, dead-letter persistence, and structured JSON logging.
 
+[![CI](https://github.com/mohamad-shafeez/api-pipeline-fixer/actions/workflows/ci.yml/badge.svg)](https://github.com/mohamad-shafeez/api-pipeline-fixer/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.11-3776AB)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688)
+![Tests](https://img.shields.io/badge/tests-59%20passed-success)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
 > **Note**: This is an independent personal proof-of-work project. It uses a deterministic simulated destination and local SQLite persistence to demonstrate transferable backend patterns. It is not an integration built for a real commercial client or external production vendor.
 
 ---
@@ -447,3 +453,10 @@ This project demonstrates core backend integration capabilities:
 - **Resilient Retry Logic**: Exponential backoff and deterministic status code classification.
 - **Auditable Observability**: Structured JSON logging and dead-letter evidence preservation.
 - **Rigorous Testing**: 59 automated unit and end-to-end integration tests.
+
+---
+
+## License
+
+MIT License. See [LICENSE](LICENSE).
+
